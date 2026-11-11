@@ -5,7 +5,7 @@ import pytest
 import scipy.sparse as sp
 
 from src.profile import build_profile
-from src.recommend import normalize_rows, recommend
+from src.recommend import color_mask, deck_identity, identity_bits, normalize_rows, recommend
 
 
 @pytest.fixture
@@ -44,3 +44,31 @@ def test_n_larger_than_candidates() -> None:
 def test_mmr_not_yet_available(X) -> None:
     with pytest.raises(NotImplementedError):
         recommend(build_profile(X, [0], [1.0]), X, [0], n=5, mmr=0.7)
+
+
+def test_identity_helpers() -> None:
+    ident = identity_bits([["R"], ["U", "R"], [], ["G"]])
+    assert list(ident) == [8, 10, 0, 16]
+    assert deck_identity(ident, [0, 2]) == 8
+    assert list(color_mask(ident, 8)) == [True, False, True, False]
+
+
+def test_color_filter() -> None:
+    identities = [["R"], ["R"], ["U", "R"], [], ["G"], ["R", "G"], ["R"]]
+    ident = identity_bits(identities)
+    X = normalize_rows(sp.csr_matrix(np.random.default_rng(1).random((len(identities), 4))))
+    train = [0, 1]
+    p = build_profile(X, train, [1.0, 1.0])
+    deck = deck_identity(ident, train)  # mono red
+
+    unfiltered = {i for i, _ in recommend(p, X, train, n=10)}
+    filtered = {i for i, _ in recommend(p, X, train, n=10, color_identity=deck, item_identity=ident)}
+    assert unfiltered == {2, 3, 4, 5, 6}
+    assert filtered == {3, 6}  # red and colorless only
+    for i in filtered:
+        assert set(identities[i]) <= {"R"}
+
+
+def test_color_filter_needs_item_identity(X) -> None:
+    with pytest.raises(ValueError):
+        recommend(build_profile(X, [0], [1.0]), X, [0], n=5, color_identity=8)
