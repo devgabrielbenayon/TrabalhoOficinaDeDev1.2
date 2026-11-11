@@ -47,6 +47,8 @@ features:
 recommend:
   max_copies: 4             # profile weight of a card = min(copies, max_copies) / max_copies
   explain_top_features: 5   # features listed in each explanation
+  demo_deck_id: null        # deck printed by `python -m src.demo`; null = first eval deck
+  demo_n: 10
   n_values: [5, 10]
   color_filter: false       # evaluated with and without
   mmr:

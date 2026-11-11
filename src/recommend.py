@@ -9,8 +9,11 @@ from __future__ import annotations
 from typing import Any, Iterable, Sequence
 
 import numpy as np
+import pandas as pd
 import scipy.sparse as sp
 from sklearn.preprocessing import normalize
+
+from src.profile import build_profile, copy_weights
 
 COLOR_BITS = {"W": 1, "U": 2, "B": 4, "R": 8, "G": 16}
 
@@ -79,3 +82,24 @@ def recommend(
             raise ValueError("color_identity filter needs item_identity")
         scores[~color_mask(item_identity, color_identity)] = -np.inf
     return top_n(scores, n)
+
+
+def recommend_for_deck(
+    deck: pd.DataFrame,
+    item_matrix: sp.csr_matrix,
+    n: int,
+    max_copies: int,
+    item_identity: np.ndarray | None = None,
+    color_filter: bool = False,
+) -> tuple[list[tuple[int, float]], np.ndarray, np.ndarray]:
+    """Build the profile from the deck's train rows only and rank the catalog.
+
+    ``deck``: rows of ``split.parquet`` for a single deck (``item_idx, copies, part``).
+    Returns ``(recs, profile, train_idxs)``.
+    """
+    train = deck[deck["part"] == "train"]
+    train_idxs = train["item_idx"].to_numpy(dtype=np.int64)
+    profile = build_profile(item_matrix, train_idxs, copy_weights(train["copies"], max_copies))
+    identity = deck_identity(item_identity, train_idxs) if color_filter else None
+    recs = recommend(profile, item_matrix, train_idxs, n, color_identity=identity, item_identity=item_identity)
+    return recs, profile, train_idxs
