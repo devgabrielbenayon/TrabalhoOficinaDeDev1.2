@@ -1,4 +1,7 @@
 seed: 42
+seed_offsets:               # make_rng(cfg, offset): one independent stream per random step
+  split: 1
+  random_baseline: 2
 data:
   format: "Modern"
   months_back: 6
