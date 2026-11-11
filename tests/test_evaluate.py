@@ -5,7 +5,10 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from src.evaluate import best_weights, deck_data, rank_cbf, search_weights, weight_grid
+from src.evaluate import (
+    METHODS, best_weights, deck_data, evaluate_methods, metrics_markdown, plot_metrics, rank_cbf,
+    run_methods, search_weights, weight_grid,
+)
 from src.features import BLOCKS, compose
 from src.recommend import identity_bits, normalize_rows, recommend_for_deck
 
@@ -61,3 +64,31 @@ def test_weight_search(toy) -> None:
     assert len(search) == 4
     assert search["ndcg@5"].is_monotonic_decreasing
     assert set(best_weights(search)) == set(BLOCKS)
+
+
+def _eval_cfg(toy) -> dict:
+    return toy["cfg"] | {"seed": 42, "seed_offsets": {"random_baseline": 2}}
+
+
+def test_all_methods_exclude_train_and_are_reproducible(toy) -> None:
+    Xn = normalize_rows(compose(toy["blocks"], dict.fromkeys(BLOCKS, 1.0)))
+    data = deck_data(toy["split"], "eval", N_ITEMS, 4, toy["identity"])
+    a = run_methods(Xn, data, toy["split"], toy["identity"], 10, _eval_cfg(toy))
+    b = run_methods(Xn, data, toy["split"], toy["identity"], 10, _eval_cfg(toy))
+    assert set(a) == set(METHODS) and a == b
+    for recs in a.values():
+        for r, train in zip(recs, data.train):
+            assert not {i for i, _ in r} & set(train.tolist())
+
+
+def test_metrics_table_and_outputs(toy, tmp_path) -> None:
+    Xn = normalize_rows(compose(toy["blocks"], dict.fromkeys(BLOCKS, 1.0)))
+    data = deck_data(toy["split"], "eval", N_ITEMS, 4, toy["identity"])
+    recs = run_methods(Xn, data, toy["split"], toy["identity"], 10, _eval_cfg(toy))
+    metrics = evaluate_methods(recs, data, Xn, [5, 10])
+    assert len(metrics) == len(METHODS) * 2
+    assert metrics[["precision", "recall", "ndcg", "coverage", "diversity"]].stack().between(0, 1).all()
+    md = metrics_markdown(metrics, len(data.deck_ids))
+    assert "## N = 5" in md and "cbf_tfidf_color" in md
+    plot_metrics(metrics, 10, tmp_path / "fig.png")
+    assert (tmp_path / "fig.png").stat().st_size > 0
