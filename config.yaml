@@ -57,6 +57,9 @@ recommend:
 evaluate:
   batch_size: 512           # decks scored per sparse matrix product
   search_n: 10              # weight search criterion: mean nDCG@search_n on validation decks
+  qualitative_method: "cbf_tfidf"   # method whose lists go to results/qualitative.md
+  qualitative_n: 10
+  qualitative_train_preview: 15     # train cards listed per deck (most copies first)
   weight_grid:              # only ratios matter (rows are re-normalized), so text is fixed
     text: [1.0]
     types: [0.0, 0.25, 0.5, 1.0]

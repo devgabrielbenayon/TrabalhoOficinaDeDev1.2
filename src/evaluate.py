@@ -10,7 +10,10 @@ Scoring is batched (many decks per sparse product) but follows exactly the seman
 rows, cosine ranking, train cards excluded, optional color-identity filter. A test checks
 that both paths give the same lists.
 
-Outputs (``results/``): weights_search.csv, metrics.csv, metrics.md, fig_metrics.png, params.json.
+3. Qualitative report: best, median and a zero-nDCG eval deck with explained Top-N.
+
+Outputs (``results/``): weights_search.csv, metrics.csv, metrics.md, fig_metrics.png,
+params.json, qualitative.md.
 
 Usage: python -m src.evaluate [--skip-search]
 """
@@ -34,12 +37,13 @@ from sklearn.preprocessing import normalize
 
 from src.baselines import popular_recs, popularity_counts, random_recs
 from src.config import load_config, make_rng
-from src.features import BLOCKS, compose, load_blocks
+from src.explain import explain, item_attributes
+from src.features import BLOCKS, compose, feature_names, load_blocks
 from src.metrics import (
     catalog_coverage, intra_list_diversity, ndcg_at_n, precision_at_n, recall_at_n,
 )
 from src.profile import copy_weights
-from src.recommend import color_mask, identity_bits, normalize_rows, top_n
+from src.recommend import color_mask, identity_bits, normalize_rows, recommend_for_deck, top_n
 from src.split import load_split
 
 matplotlib.use("Agg")
@@ -252,6 +256,67 @@ def run_params(
     }
 
 
+# --------------------------------------------------------------------------- qualitative report
+def choose_decks(per_deck: pd.DataFrame) -> list[tuple[str, int]]:
+    """Best, median and a zero-nDCG deck (ties broken by lowest deck_id)."""
+    ranked = per_deck.sort_values(["ndcg", "deck_id"], ascending=[False, True], ignore_index=True)
+    chosen = [("Maior nDCG", int(ranked.at[0, "deck_id"])),
+              ("nDCG mediano", int(ranked.at[len(ranked) // 2, "deck_id"]))]
+    zeros = per_deck.loc[per_deck["ndcg"] == 0, "deck_id"]
+    if not zeros.empty:
+        chosen.append(("nDCG = 0 (caso de erro)", int(zeros.min())))
+    seen: set[int] = set()
+    return [(label, d) for label, d in chosen if not (d in seen or seen.add(d))]
+
+
+def qualitative_report(
+    split: pd.DataFrame,
+    catalog: pd.DataFrame,
+    Xn: sp.csr_matrix,
+    names: list[str],
+    per_deck: pd.DataFrame,
+    item_identity: np.ndarray,
+    cfg: dict[str, Any],
+) -> str:
+    """Markdown with train summary, test, explained Top-N and hits for the chosen decks."""
+    ev, rc = cfg["evaluate"], cfg["recommend"]
+    method, n = ev["qualitative_method"], int(ev["qualitative_n"])
+    card_names = catalog.sort_values("item_idx")["name"].tolist()
+    keywords, types = item_attributes(catalog)
+    lines = [f"# Análise qualitativa ({method}, Top-{n})\n",
+             "Gerado por `python -m src.evaluate`. ✔ marca acerto (carta do teste do deck).\n"]
+    ndcg = per_deck.set_index("deck_id")["ndcg"]
+    for label, deck_id in choose_decks(per_deck):
+        deck = split[split["deck_id"] == deck_id]
+        recs, profile, train_idxs = recommend_for_deck(
+            deck, Xn, n, int(rc["max_copies"]), item_identity, color_filter=method.endswith("_color"))
+        train = deck[deck["part"] == "train"].sort_values(["copies", "card_name"], ascending=[False, True])
+        test = set(deck.loc[deck["part"] == "test", "item_idx"])
+        preview = int(ev["qualitative_train_preview"])
+        shown = ", ".join(f"{r.copies}x {r.card_name}" for r in train.head(preview).itertuples())
+        extra = f" … (+{len(train) - preview})" if len(train) > preview else ""
+        lines += [
+            f"\n## {label}: deck {deck_id} (nDCG@{n} = {ndcg[deck_id]:.3f})\n",
+            f"**Treino ({len(train)} cartas):** {shown}{extra}\n",
+            f"**Teste ({len(test)} cartas):** " + ", ".join(sorted(card_names[i] for i in test)) + "\n",
+            f"**Top-{n}** ({sum(i in test for i, _ in recs)} acertos):\n",
+        ]
+        for rank, (i, score) in enumerate(recs, 1):
+            exp = explain(i, profile, Xn, train_idxs, names, keywords, types, int(rc["explain_top_features"]))
+            feats = "; ".join(f"{f.label} ({f.pct:.0f}%)" for f in exp.top_features)
+            kws = ", ".join(a for a, _ in exp.shared_keywords) or "nenhuma"
+            tps = ", ".join(a for a, _ in exp.shared_types) or "nenhum"
+            lines += [
+                f"{rank}. {'✔ ' if i in test else ''}**{card_names[i]}** (score {score:.3f})",
+                f"   - features: {feats}",
+                f"   - mais parecida no deck: {card_names[exp.similar_item_idx]} "
+                f"(cosseno {exp.similar_cosine:.2f})",
+                f"   - em comum com o deck: palavras-chave {kws}; tipos {tps}",
+            ]
+        lines.append("\n**Análise:** _(a preencher pela equipe)_\n")
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- entry point
 def main() -> None:
     """Weight search on validation, then evaluation of every method on the eval decks."""
@@ -265,7 +330,7 @@ def main() -> None:
     catalog = pd.read_parquet(processed / "catalog.parquet").sort_values("item_idx")
     item_identity = identity_bits(catalog["color_identity"])
     split = load_split(processed)
-    blocks, _ = load_blocks(processed)
+    blocks, block_names = load_blocks(processed)
     max_copies = int(cfg["recommend"]["max_copies"])
 
     search_path = results / "weights_search.csv"
@@ -292,6 +357,12 @@ def main() -> None:
     params = run_params(cfg, weights, split, len(catalog), len(data.deck_ids))
     (results / "params.json").write_text(json.dumps(params, indent=2, ensure_ascii=False), encoding="utf-8")
     print(metrics.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+
+    ev = cfg["evaluate"]
+    per_deck = per_deck_metrics(recs[ev["qualitative_method"]], data, int(ev["qualitative_n"]))
+    report = qualitative_report(split, catalog, Xn, feature_names(block_names), per_deck, item_identity, cfg)
+    (results / "qualitative.md").write_text(report, encoding="utf-8")
+    print(f"Relatório qualitativo: {results / 'qualitative.md'}")
 
 
 if __name__ == "__main__":
