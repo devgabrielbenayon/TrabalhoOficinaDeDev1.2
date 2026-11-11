@@ -23,6 +23,8 @@ pip install -r requirements.txt
 ## Execução
 
 ```bash
+python -m data.download                 # baixa Scryfall + decks (idempotente)
+python -m src.load                      # gera data/processed/*.parquet e relatório de carga
 python run_all.py                       # TODO (fase 7): baixa dados, processa, avalia
 streamlit run app/streamlit_app.py      # TODO (fase 6): interface de demonstração
 pytest                                  # testes automatizados
@@ -68,5 +70,9 @@ pytest                                  # testes automatizados
 
 - Dados de cartas: [Scryfall](https://scryfall.com/docs/api/bulk-data) (bulk `oracle_cards`).
 - Decklists: [MTGODecklistCache](https://github.com/Badaro/MTGODecklistCache) (torneios do Magic Online).
+  O repositório original foi arquivado em 10/06/2025; usamos o fork mantido
+  [Jiliac/MTGODecklistCache](https://github.com/Jiliac/MTGODecklistCache), no mesmo formato,
+  com o commit fixado em `config.yaml` para reprodutibilidade. Só a pasta
+  `mtgo.com_limited_data` é usada; nomes de jogadores são descartados na leitura.
 - Magic: The Gathering é propriedade da Wizards of the Coast. Este é um projeto acadêmico
   de fã, sem afiliação com a Wizards of the Coast ou com o Scryfall.

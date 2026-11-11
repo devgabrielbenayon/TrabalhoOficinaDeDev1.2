@@ -5,6 +5,20 @@ data:
   min_main_cards: 40
   use_sideboard: false
   drop_duplicate_decks: true
+  end_date: null            # "YYYY-MM-DD"; null = latest date available in the deck cache
+  min_decks: 50
+  min_items: 500
+source:
+  # Original Badaro/MTGODecklistCache was archived on 2025-06-10; this fork keeps
+  # the same format and is still updated. The commit is pinned for reproducibility.
+  decks_repo: "https://github.com/Jiliac/MTGODecklistCache.git"
+  decks_commit: "136284ce52252add48ee953b2438c4e543d63db7"
+  deck_sources: ["mtgo.com_limited_data"]   # melee.gg folder mixes in MTGO copies and noisy lists
+  scryfall_bulk_api: "https://api.scryfall.com/bulk-data"
+  scryfall_bulk_type: "oracle_cards"
+  scryfall_named_api: "https://api.scryfall.com/cards/named"
+  user_agent: "mtg-recsys-academic/0.1"
+  request_delay_s: 0.12     # Scryfall asks for 50-100 ms between requests
 split:
   test_fraction: 0.2        # fraction of each deck's distinct non-basic cards held out for test
   validation_fraction: 0.1  # fraction of decks used only to tune block weights
