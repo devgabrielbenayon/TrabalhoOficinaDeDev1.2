@@ -54,6 +54,15 @@ recommend:
   mmr:
     enabled: false
     lambda: 0.7
+evaluate:
+  batch_size: 512           # decks scored per sparse matrix product
+  search_n: 10              # weight search criterion: mean nDCG@search_n on validation decks
+  weight_grid:              # only ratios matter (rows are re-normalized), so text is fixed
+    text: [1.0]
+    types: [0.0, 0.25, 0.5, 1.0]
+    colors: [0.0, 0.25, 0.5, 1.0]
+    keywords: [0.0, 0.25, 0.5, 1.0]
+    numeric: [0.0, 0.3, 0.6]
 paths:
   raw: "data/raw"
   processed: "data/processed"
