@@ -25,6 +25,7 @@ pip install -r requirements.txt
 ```bash
 python -m data.download                 # baixa Scryfall + decks (idempotente)
 python -m src.load                      # gera data/processed/*.parquet e relatório de carga
+python -m src.features                  # pré-processa o texto e gera a matriz de itens (.npz)
 python run_all.py                       # TODO (fase 7): baixa dados, processa, avalia
 streamlit run app/streamlit_app.py      # TODO (fase 6): interface de demonstração
 pytest                                  # testes automatizados
