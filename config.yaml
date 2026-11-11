@@ -1,0 +1,35 @@
+seed: 42
+data:
+  format: "Modern"
+  months_back: 6
+  min_main_cards: 40
+  use_sideboard: false
+  drop_duplicate_decks: true
+split:
+  test_fraction: 0.2        # fraction of each deck's distinct non-basic cards held out for test
+  validation_fraction: 0.1  # fraction of decks used only to tune block weights
+  min_cards_per_deck: 10    # decks with fewer distinct cards are excluded from evaluation
+features:
+  tfidf:
+    ngram_range: [1, 2]
+    min_df: 2
+    max_features: 20000
+  block_weights:            # tuned on the validation decks
+    text: 1.0
+    types: 0.5
+    colors: 0.5
+    keywords: 0.5
+    numeric: 0.3
+  embeddings:
+    enabled: true
+    model: "sentence-transformers/all-MiniLM-L6-v2"
+recommend:
+  n_values: [5, 10]
+  color_filter: false       # evaluated with and without
+  mmr:
+    enabled: false
+    lambda: 0.7
+paths:
+  raw: "data/raw"
+  processed: "data/processed"
+  results: "results"
