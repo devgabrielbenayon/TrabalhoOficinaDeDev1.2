@@ -46,6 +46,7 @@ features:
     model: "sentence-transformers/all-MiniLM-L6-v2"
 recommend:
   max_copies: 4             # profile weight of a card = min(copies, max_copies) / max_copies
+  explain_top_features: 5   # features listed in each explanation
   n_values: [5, 10]
   color_filter: false       # evaluated with and without
   mmr:
