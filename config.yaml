@@ -34,6 +34,10 @@ features:
     colors: 0.5
     keywords: 0.5
     numeric: 0.3
+  # "scaled": divide numeric block by sqrt(5) (keeps cmc/P/T magnitudes);
+  # "l2": per-row L2 like the other blocks (every non-creature becomes [1,0,0,0,0]).
+  numeric_norm: "scaled"
+  sample_cards: ["Lightning Bolt", "Ragavan, Nimble Pilferer", "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki"]
   embeddings:
     enabled: true
     model: "sentence-transformers/all-MiniLM-L6-v2"
