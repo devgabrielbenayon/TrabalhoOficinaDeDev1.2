@@ -27,13 +27,14 @@ import platform
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import matplotlib
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from sklearn.preprocessing import normalize
+from tqdm import tqdm
 
 from src.baselines import popular_recs, popularity_counts, random_recs
 from src.config import load_config, make_rng
@@ -44,7 +45,7 @@ from src.metrics import (
 )
 from src.profile import copy_weights
 from src.recommend import (
-    color_mask, identity_bits, mmr_rerank, normalize_rows, recommend_for_deck, top_n,
+    COLOR_BITS, color_mask, identity_bits, mmr_rerank, normalize_rows, recommend_for_deck, top_n,
 )
 from src.split import load_split
 
@@ -63,13 +64,15 @@ METHODS = [
 METRICS = ["precision", "recall", "ndcg", "coverage", "diversity"]
 METRIC_LABELS = {"precision": "Precision", "recall": "Recall", "ndcg": "nDCG",
                  "coverage": "Cobertura", "diversity": "Diversidade"}
-LIBRARIES = ["numpy", "pandas", "scipy", "scikit-learn", "nltk", "PyYAML", "matplotlib"]
+LIBRARIES = ["numpy", "pandas", "scipy", "scikit-learn", "nltk", "PyYAML", "matplotlib",
+             "torch", "sentence-transformers", "streamlit"]
 # Categorical slots 1-5 of the reference palette (light mode), one per method.
 METHOD_COLORS = [
     "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#8b6bd6", "#6a9c35",
 ]
 
 Recs = list[list[tuple[int, float]]]
+DENSE_THRESHOLD = 0.05  # item matrices denser than this are scored with dense algebra
 
 
 # --------------------------------------------------------------------------- deck data
@@ -117,10 +120,17 @@ def rank_cbf(
 ) -> list[list[tuple[int, float]]]:
     """Top-``n`` content-based lists for every deck (``Xn``: row-normalized item matrix)."""
     profiles = normalize(data.weights @ Xn)  # mean scale is irrelevant after L2 normalization
+    # Dense embedding blocks make sparse products slow: use dense algebra when the matrix is dense.
+    dense = Xn.nnz > DENSE_THRESHOLD * Xn.shape[0] * Xn.shape[1]
+    if dense:
+        profiles, XnT = profiles.toarray(), Xn.toarray().T
     out: list[list[tuple[int, float]]] = []
     for start in range(0, len(data.deck_ids), batch_size):
         stop = min(start + batch_size, len(data.deck_ids))
-        scores = np.asarray((profiles[start:stop] @ Xn.T).todense(), dtype=np.float64)
+        if dense:
+            scores = profiles[start:stop] @ XnT
+        else:
+            scores = np.asarray((profiles[start:stop] @ Xn.T).todense(), dtype=np.float64)
         for r in range(stop - start):
             s = scores[r]
             s[data.train[start + r]] = -np.inf
@@ -189,13 +199,13 @@ def weight_grid(cfg: dict[str, Any]) -> list[dict[str, float]]:
 
 
 def search_weights(
-    blocks: dict[str, sp.csr_matrix], val: DeckData, cfg: dict[str, Any]
+    blocks: dict[str, sp.csr_matrix], val: DeckData, cfg: dict[str, Any], desc: str = "busca de pesos"
 ) -> pd.DataFrame:
     """Mean validation nDCG@search_n of every weight combination, best first."""
     ev = cfg["evaluate"]
     n, batch = int(ev["search_n"]), int(ev["batch_size"])
     rows = []
-    for w in weight_grid(cfg):
+    for w in tqdm(weight_grid(cfg), desc=desc, unit="comb", mininterval=5):
         if not any(w.values()):
             continue
         Xn = normalize_rows(compose(blocks, w))
@@ -224,12 +234,12 @@ def run_methods(
     """Top-n lists for all methods. Xn_emb is the MiniLM representation."""
     n_items, batch = Xn.shape[0], int(cfg["evaluate"]["batch_size"])
 
-    # Fallback mantém compatibilidade com testes e chamadas antigas.
+    # Without embeddings (tests, old callers) cbf_emb falls back to the TF-IDF matrix.
     if Xn_emb is None:
         Xn_emb = Xn
 
     if Xn_emb.shape[0] != n_items:
-        raise ValueError("TF-IDF e embeddings devem ter o mesmo número de cartas")
+        raise ValueError("TF-IDF and embedding matrices must have the same number of items")
 
     pop = popularity_counts(split, n_items, subset="eval")
     rng = make_rng(cfg, cfg["seed_offsets"]["random_baseline"])
@@ -267,7 +277,11 @@ def evaluate_methods(
     n_values: list[int],
     matrices_by_method: dict[str, sp.csr_matrix] | None = None,
 ) -> pd.DataFrame:
-    """Evaluate each method using its own representation for diversity."""
+    """Mean metrics of each method and N.
+
+    Diversity uses ``Xn`` for every method (one common space) unless ``matrices_by_method``
+    overrides it for a method.
+    """
     rows = []
 
     for method, recs in recs_by_method.items():
@@ -396,16 +410,50 @@ def run_params(
 
 
 # --------------------------------------------------------------------------- qualitative report
-def choose_decks(per_deck: pd.DataFrame) -> list[tuple[str, int]]:
-    """Best, median and a zero-nDCG deck (ties broken by lowest deck_id)."""
+def _colors(bits: int) -> str:
+    """Color identity bits -> 'WUBRG'-style string."""
+    return "".join(c for c, b in COLOR_BITS.items() if bits & b) or "incolor"
+
+
+def _pick_new_identity(
+    candidates: list[int], start: int, identity: Mapping[int, int] | None, used: set[int]
+) -> int:
+    """Deck closest to position ``start`` whose color identity was not used yet (else ``start``)."""
+    if identity is not None:
+        order = sorted(range(len(candidates)), key=lambda k: (abs(k - start), k))
+        for k in order:
+            if identity.get(candidates[k]) not in used:
+                return candidates[k]
+    return candidates[start]
+
+
+def choose_decks(
+    per_deck: pd.DataFrame, identity: Mapping[int, int] | None = None
+) -> list[tuple[str, int]]:
+    """Best deck, a median deck among those with at least one hit, and a zero-nDCG deck.
+
+    The median is taken over decks with nDCG > 0: more than half of the decks may have
+    nDCG = 0, and then the plain median would be a second error case. When ``identity``
+    (deck_id -> color identity bits) is given, the median and error decks are moved to the
+    nearest deck whose color identity differs from the decks already chosen, so the
+    report shows different archetypes. Ties are broken by lowest deck_id.
+    """
     ranked = per_deck.sort_values(["ndcg", "deck_id"], ascending=[False, True], ignore_index=True)
-    chosen = [("Maior nDCG", int(ranked.at[0, "deck_id"])),
-              ("nDCG mediano", int(ranked.at[len(ranked) // 2, "deck_id"]))]
-    zeros = per_deck.loc[per_deck["ndcg"] == 0, "deck_id"]
-    if not zeros.empty:
-        chosen.append(("nDCG = 0 (caso de erro)", int(zeros.min())))
-    seen: set[int] = set()
-    return [(label, d) for label, d in chosen if not (d in seen or seen.add(d))]
+    best = int(ranked.at[0, "deck_id"])
+    chosen = [("Maior nDCG", best)]
+    used = {identity.get(best)} if identity is not None else set()
+
+    hits = per_deck[(per_deck["ndcg"] > 0) & (per_deck["deck_id"] != best)]
+    hits = hits.sort_values(["ndcg", "deck_id"])["deck_id"].astype(int).tolist()
+    if hits:
+        median = _pick_new_identity(hits, len(hits) // 2, identity, used)
+        chosen.append(("nDCG mediano entre os decks com acerto", median))
+        used.add(identity.get(median) if identity is not None else None)
+
+    zeros = sorted(per_deck.loc[per_deck["ndcg"] == 0, "deck_id"].astype(int))
+    if zeros:
+        chosen.append(("nDCG = 0 (caso de erro)", _pick_new_identity(zeros, 0, identity, used)))
+    return chosen
 
 
 def qualitative_report(
@@ -425,7 +473,13 @@ def qualitative_report(
     lines = [f"# Análise qualitativa ({method}, Top-{n})\n",
              "Gerado por `python -m src.evaluate`. ✔ marca acerto (carta do teste do deck).\n"]
     ndcg = per_deck.set_index("deck_id")["ndcg"]
-    for label, deck_id in choose_decks(per_deck):
+    train_rows = split[split["part"] == "train"]
+    deck_ids = set(per_deck["deck_id"].astype(int))
+    identity = {
+        int(d): int(np.bitwise_or.reduce(item_identity[g["item_idx"].to_numpy()]))
+        for d, g in train_rows[train_rows["deck_id"].isin(deck_ids)].groupby("deck_id")
+    }
+    for label, deck_id in choose_decks(per_deck, identity):
         deck = split[split["deck_id"] == deck_id]
         recs, profile, train_idxs = recommend_for_deck(
             deck, Xn, n, int(rc["max_copies"]), item_identity, color_filter=method.endswith("_color"))
@@ -435,7 +489,8 @@ def qualitative_report(
         shown = ", ".join(f"{r.copies}x {r.card_name}" for r in train.head(preview).itertuples())
         extra = f" … (+{len(train) - preview})" if len(train) > preview else ""
         lines += [
-            f"\n## {label}: deck {deck_id} (nDCG@{n} = {ndcg[deck_id]:.3f})\n",
+            f"\n## {label}: deck {deck_id}, cores {_colors(identity.get(deck_id, 0))} "
+            f"(nDCG@{n} = {ndcg[deck_id]:.3f})\n",
             f"**Treino ({len(train)} cartas):** {shown}{extra}\n",
             f"**Teste ({len(test)} cartas):** " + ", ".join(sorted(card_names[i] for i in test)) + "\n",
             f"**Top-{n}** ({sum(i in test for i, _ in recs)} acertos):\n",
@@ -474,7 +529,7 @@ def main() -> None:
     split = load_split(processed)
     blocks, block_names = load_blocks(processed)
 
-    # Carrega ou gera os embeddings MiniLM.
+    # Load (or build and cache) the MiniLM embeddings.
     embedding_cfg = cfg["features"]["embeddings"]
 
     if not embedding_cfg.get("enabled", False):
@@ -493,7 +548,7 @@ def main() -> None:
             "A quantidade de embeddings não corresponde ao catálogo"
         )
 
-    # Mantém todos os blocos originais e substitui somente o texto.
+    # Embeddings replace only the text block; the other blocks stay.
     embedding_blocks = dict(blocks)
     embedding_blocks["text"] = sp.csr_matrix(embeddings)
 
@@ -519,13 +574,14 @@ def main() -> None:
             max_copies, item_identity
         )
 
-        # Busca de pesos para TF-IDF.
-        search = search_weights(blocks, val, cfg)
+        # Block-weight search for TF-IDF, on validation decks only.
+        search = search_weights(blocks, val, cfg, "busca de pesos TF-IDF")
 
-        # Busca independente de pesos para MiniLM.
-        search_emb = search_weights(embedding_blocks, val, cfg)
+        # Independent block-weight search for MiniLM.
+        search_emb = search_weights(embedding_blocks, val, cfg, "busca de pesos MiniLM")
 
         weights = best_weights(search)
+        print("Busca do λ do MMR na validação…")
         Xn_for_search = normalize_rows(compose(blocks, weights))
         mmr_search = search_mmr_lambda(
             Xn_for_search,
@@ -559,10 +615,8 @@ def main() -> None:
     )
     print(f"Lambda MMR escolhido na validação: {selected_lambda:.1f}")
 
-    # Matriz TF-IDF.
     Xn = normalize_rows(compose(blocks, weights))
 
-    # Matriz MiniLM.
     Xn_emb = normalize_rows(compose(embedding_blocks, weights_emb))
 
     data = deck_data(
@@ -572,7 +626,8 @@ def main() -> None:
 
     n_values = [int(n) for n in cfg["recommend"]["n_values"]]
 
-    # Executa todos os métodos.
+    # Top-N lists of every method on the eval decks.
+    print(f"Avaliando {len(METHODS)} métodos em {len(data.deck_ids)} decks de avaliação…")
     recs = run_methods(
         Xn,
         data,
@@ -584,18 +639,9 @@ def main() -> None:
         mmr_lambda=selected_lambda,
     )
 
-    # Cada método utiliza sua própria representação para calcular diversidade.
-    matrices_by_method = {
-        "cbf_emb": Xn_emb,
-    }
-
-    metrics = evaluate_methods(
-        recs,
-        data,
-        Xn,
-        n_values,
-        matrices_by_method=matrices_by_method,
-    )
+    # Diversity is measured in one common space (the selected TF-IDF matrix) for every
+    # method, so the column is comparable across methods, cbf_emb included.
+    metrics = evaluate_methods(recs, data, Xn, n_values)
 
     metrics.to_csv(results / "metrics.csv", index=False)
     (results / "metrics.md").write_text(metrics_markdown(metrics, len(data.deck_ids)), encoding="utf-8")
@@ -608,6 +654,7 @@ def main() -> None:
     print(metrics.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
     tradeoff_n = 10
+    print("Curva de trade-off do MMR (nDCG@10 × diversidade) para cada λ…")
     eval_tradeoff_recs = {
         float(lam): rank_cbf_mmr(
             Xn, data, tradeoff_n, int(cfg["evaluate"]["batch_size"]), float(lam)
