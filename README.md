@@ -86,6 +86,34 @@ sem stemming; seus vetores são L2-normalizados e substituem somente o bloco de 
 Tipos, cores, keywords e atributos numéricos permanecem iguais. Blocos e nomes de
 features são salvos em `data/processed` para evitar reconstruções na interface.
 
+### Decisões de modelagem e limpeza (justificativas)
+
+| Decisão | Justificativa |
+|---|---|
+| **Usuário = deck** (só o mainboard) | Um deck é uma escolha deliberada de cerca de 60 cartas feita por um jogador para jogar junto; funciona como o "histórico de consumo" do usuário. O nome do jogador é descartado: o mesmo jogador pode ter decks de estilos diferentes, e assim não guardamos dados pessoais. |
+| **Interação = carta no deck**, peso `min(cópias, 4) / 4` | Não há notas explícitas. O número de cópias indica o quanto o deck depende da carta: 4 cópias (o máximo permitido) contam integralmente; 1 cópia conta 1/4. |
+| **Remover terrenos básicos** (inclusive Snow-Covered e Wastes) | Aparecem em quase todo deck e não dizem nada sobre o estilo dele; mantê-los inflaria as métricas com acertos triviais e poluiria o perfil. |
+| **Remover decks duplicados exatos** (10.377 de 20.837) | Listas idênticas, comuns nas Leagues do MTGO, fariam o mesmo "usuário" contar várias vezes e poderiam cair uma em validação e outra em avaliação. |
+| **Ignorar o sideboard** | O sideboard é ajustado contra adversários específicos e entra só em parte das partidas; o mainboard representa melhor a estratégia do deck. |
+| **Descartar decks com menos de 40 cartas** | Provável erro de coleta (nenhum deck do recorte foi afetado: o menor tem 60). |
+| **Um formato (Modern) e 6 meses** | Cartas de formatos diferentes não são intercambiáveis; uma janela curta mantém o catálogo coerente com o meta do período. |
+| **Texto: nome da carta → `cardname`, sem lembretes, símbolos de mana → tokens, stopwords, stemming** | O nome próprio não descreve o efeito; o texto de lembrete repete regras gerais; símbolos como `{R}` e `{T}` carregam significado (cor, "virar") que a tokenização comum apagaria; stemming junta variações ("deals"/"deal"). Só stopwords em inglês, pois o texto das cartas é em inglês. |
+| **Numéricos (cmc, poder, resistência) em MinMax; `*` → 0 com flag** | Coloca os atributos na mesma escala de [0, 1]; a flag preserva a informação de poder/resistência variável. |
+
+**O que é "relevante".** Uma carta é relevante para um deck se é uma carta não-básica
+desse deck que foi separada para teste. Justificativa: não existem notas, e o deck em si
+é a melhor evidência disponível de preferência; o jogador escolheu aquela carta, entre
+milhares possíveis, para aquele deck. Se o sistema, vendo só o resto do deck, recupera
+uma carta escondida, ele recomendou algo que o próprio jogador considerou bom o
+suficiente para usar. A relevância é binária porque não há graus de preferência
+confiáveis (o número de cópias também reflete regras do jogo e custo, não só gosto).
+
+**Por que o teste é aleatório, e não "as mais recentes".** O guia sugere separar as
+interações mais recentes ou usar leave-one-out. Um deck não tem ordem temporal entre
+as suas cartas: todas são escolhidas juntas, na mesma data. Por isso sorteamos 20% das
+cartas distintas de cada deck (pelo menos 1), com seed fixa. Isso também testa o deck
+inteiro e não só uma carta, como faria o leave-one-out.
+
 ### Protocolo sem vazamento
 
 1. **Carga:** Scryfall fornece os metadados; decklists do MTGO são filtradas pelo
