@@ -8,6 +8,22 @@ descarta ocorrências sem correspondência. A unidade da avaliação é um deck:
 cartas distintas são separadas entre treino e teste, com a mesma lista de catálogo
 para todos os métodos.
 
+Escolhas de limpeza e suas justificativas (detalhadas no README): terrenos básicos são
+removidos porque aparecem em quase todo deck e gerariam acertos triviais; decks
+duplicados exatos são removidos para que a mesma lista não conte como vários usuários
+nem apareça ao mesmo tempo em validação e avaliação; o sideboard é ignorado porque
+responde a adversários específicos, e não à estratégia principal do deck.
+
+**Relevância.** Uma carta é relevante para um deck se é uma carta não-básica desse deck
+separada para teste. Não há notas; o deck é a melhor evidência de preferência disponível,
+pois o jogador escolheu aquela carta entre milhares para jogar junto com as demais.
+Recuperar uma carta escondida, vendo só o resto do deck, significa recomendar algo que o
+próprio usuário julgou bom o bastante para usar.
+
+**Split aleatório.** As cartas de um deck não têm ordem temporal (são escolhidas juntas,
+na mesma data), então o critério "interações mais recentes" não se aplica. Sorteamos 20%
+das cartas distintas de cada deck, com pelo menos uma, usando seed fixa.
+
 ## Vetores das cartas
 
 Para cada carta, o pipeline constrói cinco blocos:
