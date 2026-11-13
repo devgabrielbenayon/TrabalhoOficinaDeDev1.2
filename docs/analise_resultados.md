@@ -41,8 +41,10 @@ conteúdo do deck. Também recomenda menos terrenos (60,4% das recomendações).
 **3. O filtro de cor ajuda os dois tipos de método.** Na FBC, o nDCG@10 sobe de 0,099 para
 0,108 (+9%) e a cobertura também sobe (0,494 → 0,524), porque cartas fora das cores do
 deck saem da lista e abrem espaço para outras. No caso qualitativo mediano (deck branco e
-azul), sem filtro a lista inclui Breeding Pool, Steam Vents e Watery Grave, que o deck
-não pode usar: o texto delas é quase idêntico ao de Hallowed Fountain, que está no deck.
+azul), sem filtro a lista inclui Breeding Pool, Steam Vents e Watery Grave, cujo texto é
+quase idêntico ao de Hallowed Fountain, que está no deck. Mas o filtro não é perfeito: o
+acerto desse deck, Sacred Foundry, é vermelho, uma cor que só aparece nas cartas de
+teste; com o filtro, ele também sairia da lista.
 
 **4. Diversidade: a FBC gera listas mais homogêneas.** A diversidade intra-lista da FBC
 (0,59 a 0,63) é menor que a do popular (0,70), porque o ranking por similaridade puxa
@@ -88,8 +90,9 @@ Similaridade de conteúdo mede "parecido", não "funciona junto".
   sistema acerta Erode, Ghost Quarter e Price of Freedom nas posições 1, 2 e 4: todas têm
   o mesmo texto de "procurar terreno básico" das cartas de treino.
 - **Mediano entre os decks com acerto (deck 4207, branco e azul, nDCG@10 = 0,195):** acerta
-  Sacred Foundry em 3º lugar; erra por recomendar shocklands de outras cores (o filtro de
-  cor resolveria) e não encontra Teferi, Time Raveler nem Ranger-Captain of Eos.
+  Sacred Foundry em 3º lugar, empatada com outras shocklands de texto quase idêntico (só a
+  cor as distingue, e o vermelho de Sacred Foundry não aparece no treino); não encontra
+  Teferi, Time Raveler nem Ranger-Captain of Eos.
 - **Caso de erro (deck 0, azul, vermelho e verde, nDCG@10 = 0):** ver observação 7.
 
 Em 58,5% dos decks de avaliação a FBC não acerta nenhuma carta no Top-10 (51,8% no
