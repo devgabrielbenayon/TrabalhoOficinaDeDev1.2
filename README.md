@@ -187,8 +187,9 @@ Rascunhos de relatório e slides: [metodologia](docs/metodologia.md),
 
 | Membro | Papel |
 |---|---|
-| *Preencher pela equipe* | *Preencher pela equipe* |
-| *Preencher pela equipe* | *Preencher pela equipe* |
+| Gabriel Benayon | Setup do projeto, coleta e pré-processamento dos dados, análise exploratória e representação vetorial das cartas (TF-IDF e blocos de atributos); conferência final e correções |
+| Enzo Avila | Split treino/teste, perfil do deck, recomendação por cosseno, explicações, métricas, baselines e avaliação offline |
+| Ricardo Santiago | Embeddings semânticos (MiniLM), MMR, interface Streamlit, script `run_all.py`, README e rascunhos do relatório |
 
 **Vídeo de apresentação:** *inserir o link da equipe*.
 
