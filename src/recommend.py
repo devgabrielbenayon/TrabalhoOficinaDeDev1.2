@@ -61,52 +61,38 @@ def mmr_rerank(
     lam: float,
     n: int,
 ) -> list[tuple[int, float]]:
-    """Maximal Marginal Relevance: re-ranking guloso para diversidade.
+    """Maximal Marginal Relevance: greedy re-ranking for diversity.
 
-    ``candidates`` são pares ``(idx, relevance_score)`` já ordenados por relevância
-    decrescente (vindos de ``cosine_scores`` + ``top_n``).
-    ``lam`` controla o trade-off: 1.0 = só relevância, 0.0 = só diversidade.
-    ``item_matrix`` deve estar row-normalized (dot product = cosine).
-    Retorna até ``n`` pares ``(idx, mmr_score)`` em ordem decrescente de MMR.
+    ``candidates`` are ``(idx, relevance_score)`` pairs sorted by decreasing relevance
+    (from ``cosine_scores`` + ``top_n``). At each step the candidate maximizing
+    ``lam * relevance - (1 - lam) * max_sim_to_selected`` is picked (ties: lower ``idx``).
+    ``lam`` = 1.0 means relevance only, 0.0 diversity only. ``item_matrix`` must be
+    row-normalized (dot product = cosine). Returns up to ``n`` ``(idx, mmr_score)`` pairs.
+
+    Vectorized: the candidate-candidate cosine matrix is computed once and the running
+    ``max_sim`` is updated with the row of each newly selected item.
     """
     if not np.isfinite(lam) or not 0.0 <= lam <= 1.0:
         raise ValueError("lam must be a finite value between 0 and 1")
     if not candidates or n <= 0:
         return []
 
-    cand_idxs = [idx for idx, _ in candidates]
-    cand_vecs = np.asarray(item_matrix[cand_idxs].toarray())
-    pos = {idx: k for k, idx in enumerate(cand_idxs)}
+    idxs = np.array([idx for idx, _ in candidates], dtype=np.int64)
+    relevance = np.array([score for _, score in candidates], dtype=np.float64)
+    vecs = item_matrix[idxs]
+    sims = np.asarray((vecs @ vecs.T).todense() if sp.issparse(vecs) else vecs @ vecs.T)
+
+    max_sim = np.zeros(idxs.size)          # no item selected yet: no redundancy penalty
+    available = np.ones(idxs.size, dtype=bool)
     selected: list[tuple[int, float]] = []
-    remaining = set(cand_idxs)
-
-    for _ in range(min(n, len(cand_idxs))):
-        best_idx = -1
-        best_mmr = -np.inf
-
-        for idx in cand_idxs:
-            if idx not in remaining:
-                continue
-            relevance = candidates[pos[idx]][1]
-            if selected:
-                vec_i = cand_vecs[pos[idx]]
-                max_sim = max(
-                    float(vec_i @ cand_vecs[pos[sel_idx]])
-                    for sel_idx, _ in selected
-                )
-            else:
-                max_sim = 0.0
-
-            mmr_score = lam * relevance - (1.0 - lam) * max_sim
-            if mmr_score > best_mmr or (
-                mmr_score == best_mmr and (best_idx < 0 or idx < best_idx)
-            ):
-                best_mmr = mmr_score
-                best_idx = idx
-
-        selected.append((best_idx, best_mmr))
-        remaining.discard(best_idx)
-
+    for step in range(min(n, idxs.size)):
+        mmr = np.where(available, lam * relevance - (1.0 - lam) * max_sim, -np.inf)
+        best_value = mmr.max()
+        ties = np.flatnonzero(mmr == best_value)
+        best = ties[np.argmin(idxs[ties])]
+        selected.append((int(idxs[best]), float(best_value)))
+        available[best] = False
+        max_sim = sims[best] if step == 0 else np.maximum(max_sim, sims[best])
     return selected
 
 
@@ -152,7 +138,7 @@ def recommend_for_deck(
     """Build the profile from the deck's train rows only and rank the catalog.
 
     ``deck``: rows of ``split.parquet`` for a single deck (``item_idx, copies, part``).
-    ``mmr``: quando float (λ), aplica MMR re-ranking para diversidade.
+    ``mmr``: when a float (λ), applies MMR re-ranking for diversity.
     Returns ``(recs, profile, train_idxs)``.
     """
     train = deck[deck["part"] == "train"]
