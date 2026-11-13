@@ -13,6 +13,7 @@ Usage: python -m src.features
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,97 @@ def text_block(df: pd.DataFrame, cfg: dict[str, Any]) -> tuple[sp.csr_matrix, li
     )
     mat = vec.fit_transform(df["clean_text"])
     return mat.tocsr(), [f"text:{t}" for t in vec.get_feature_names_out()]
+
+
+def build_embedding_matrix(cards: pd.DataFrame, model_name: str) -> np.ndarray:
+    """Generate L2-normalized MiniLM embeddings from original card rules text.
+
+    Unlike TF-IDF, this representation uses the original oracle_text, without
+    stemming or the preprocessing pipeline.
+    """
+    from sentence_transformers import SentenceTransformer
+
+    if "oracle_text" not in cards.columns:
+        raise ValueError("cards must contain the 'oracle_text' column")
+
+    texts = cards["oracle_text"].fillna("").astype(str).tolist()
+
+    model = SentenceTransformer(model_name)
+    embeddings = model.encode(
+        texts,
+        batch_size=64,
+        show_progress_bar=True,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )
+
+    embeddings = np.asarray(embeddings, dtype=np.float32)
+
+    if embeddings.ndim != 2 or embeddings.shape[0] != len(cards):
+        raise ValueError("Invalid embedding matrix dimensions")
+
+    if not np.isfinite(embeddings).all():
+        raise ValueError("Embedding matrix contains non-finite values")
+
+    return normalize(embeddings, norm="l2", axis=1).astype(np.float32, copy=False)
+
+
+def load_or_build_embeddings(
+    cards: pd.DataFrame,
+    model_name: str,
+    cache_path: str | Path,
+) -> np.ndarray:
+    """Load cached embeddings or generate and save them."""
+    cache_path = Path(cache_path)
+    metadata_path = cache_path.with_suffix(".json")
+
+    texts = cards["oracle_text"].fillna("").astype(str).tolist()
+
+    catalog_hash = hashlib.sha256(
+        "\0".join(texts).encode("utf-8")
+    ).hexdigest()
+
+    expected_metadata = {
+        "model_name": model_name,
+        "n_cards": len(cards),
+        "catalog_hash": catalog_hash,
+    }
+
+    if cache_path.exists() and metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            cached = np.load(cache_path)
+            cached_norms = np.linalg.norm(cached, axis=1) if cached.ndim == 2 else np.array([])
+
+            if (
+                metadata == expected_metadata
+                and cached.ndim == 2
+                and cached.shape[1] > 0
+                and cached.shape[0] == len(cards)
+                and np.isfinite(cached).all()
+                and np.all(
+                    np.isclose(cached_norms, 1.0) | np.isclose(cached_norms, 0.0)
+                )
+            ):
+                print(f"Embeddings carregados do cache: {cache_path}")
+                return cached.astype(np.float32, copy=False)
+            print(f"Cache de embeddings inválido ou desatualizado; regenerando: {cache_path}")
+        except (ValueError, OSError, EOFError, json.JSONDecodeError) as exc:
+            print(f"Não foi possível ler o cache de embeddings ({exc}); regenerando.")
+
+    print(f"Gerando embeddings com {model_name}...")
+    embeddings = build_embedding_matrix(cards, model_name)
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(cache_path, embeddings)
+    metadata_path.write_text(
+        json.dumps(expected_metadata, indent=2),
+        encoding="utf-8",
+    )
+
+    print(f"Embeddings salvos em: {cache_path}")
+    return embeddings
+
 
 
 def color_block(df: pd.DataFrame) -> tuple[sp.csr_matrix, list[str]]:
