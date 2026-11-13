@@ -22,6 +22,7 @@ from src.features import type_tokens
 PREFIX_LABELS = {
     "text": "texto", "type": "tipo", "kw": "palavra-chave",
     "color": "cor", "identity": "identidade de cor", "num": "atributo numérico",
+    "emb": "dimensão do embedding",  # MiniLM dimensions have no human-readable meaning
 }
 
 
