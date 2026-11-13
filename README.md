@@ -1,119 +1,174 @@
-# Recomendador de Cartas de Magic: The Gathering (Filtragem Baseada em Conteúdo)
+# Recomendador de Cartas de Magic: The Gathering
 
-Trabalho acadêmico de Sistemas de Recomendação. Dado um deck (ou um conjunto de cartas
-escolhidas pelo usuário), o sistema recomenda cartas de Magic parecidas com as que já
-estão no deck, usando Filtragem Baseada em Conteúdo (TF-IDF + atributos, similaridade
-do cosseno) e explica cada recomendação.
+Projeto acadêmico de sistemas de recomendação. A partir de um deck ou de cartas
+escolhidas pelo usuário, recomenda cartas com filtragem baseada em conteúdo (FBC),
+similaridade do cosseno e explicações dos fatores que contribuíram para cada resultado.
 
-> 🚧 Em construção. As seções marcadas com *TODO* serão preenchidas nas próximas fases.
+Magic: The Gathering é propriedade da Wizards of the Coast. Este projeto de fã não é
+afiliado nem endossado pela Wizards of the Coast. As imagens são servidas pelo Scryfall.
 
-## Requisitos
+## Requisitos e instalação
 
-- Python 3.10+ (testado com 3.12)
-- ~3 GB livres em disco (dados + modelo de embeddings)
+- Python 3.10 ou superior (testado com Python 3.12).
+- Git instalado e acesso à internet para baixar os dados, o repositório de decklists e
+  o modelo MiniLM na primeira execução.
+- Espaço livre suficiente para os arquivos de dados e o cache do modelo; reserve
+  aproximadamente 3 GB.
 
-## Instalação
-
-```bash
+```powershell
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+No macOS/Linux, ative o ambiente com `source .venv/bin/activate`.
+As dependências fixam as versões principais e instalam a variante CPU do PyTorch.
+
 ## Execução
 
-```bash
-python -m data.download                 # baixa Scryfall + decks (idempotente)
-python -m src.load                      # gera data/processed/*.parquet e relatório de carga
-python -m src.features                  # pré-processa o texto e gera a matriz de itens (.npz)
-python -m src.split                     # split treino/teste por deck e validação/avaliação
-python -m src.demo                      # Top-10 com explicações para um deck (--deck ID, --color)
-python -m src.evaluate                  # busca de pesos + métricas + relatório qualitativo
-python run_all.py                       # TODO (fase 7): baixa dados, processa, avalia
-streamlit run app/streamlit_app.py      # TODO (fase 6): interface de demonstração
-pytest                                  # testes automatizados
+```powershell
+# Baixa os dados, processa, divide, ajusta e avalia o sistema
+python run_all.py
+
+# Usa os arquivos já presentes em data/raw
+python run_all.py --skip-download
+
+# Interface: execute após concluir o pipeline
+streamlit run app/streamlit_app.py
+
+# Testes automatizados
+python -m pytest
 ```
 
-## Estrutura de pastas
+O pipeline registra a duração de cada etapa e interrompe com erro se algum comando
+falhar. O download é idempotente: arquivos brutos que já existem são reutilizados.
+`--skip-download` não pula processamento e requer os arquivos de Scryfall e
+MTGODecklistCache em `data/raw`.
 
+Etapas reproduzíveis também podem ser executadas individualmente:
+
+```text
+python -m data.download
+python -m src.load
+python -m src.features
+python -m src.split
+python -m src.evaluate
 ```
-├── config.yaml          # todos os parâmetros (seed, recorte, pesos, N...)
-├── requirements.txt     # dependências com versões fixadas
-├── run_all.py           # reproduz todos os resultados com um comando
-├── data/
-│   ├── download.py      # baixa Scryfall + MTGODecklistCache
-│   ├── raw/             # dados brutos (fora do git)
-│   └── processed/       # artefatos processados (fora do git)
-├── src/                 # pipeline: carga, pré-processamento, features, perfil,
-│                        # recomendação, explicação, baselines, split, métricas, avaliação
-├── app/                 # interface Streamlit
-├── notebooks/           # análise exploratória
-├── tests/               # testes (pytest)
-├── results/             # tabelas e figuras geradas
-└── docs/                # rascunhos para o relatório
-```
+
+O primeiro ciclo de avaliação baixa o modelo `sentence-transformers/all-MiniLM-L6-v2`
+e o armazena em `data/processed/embeddings.npy`. Execuções seguintes reutilizam o
+cache quando modelo, quantidade e texto ordenado do catálogo correspondem.
 
 ## Pipeline e protocolo de avaliação
 
-*Descrição completa: TODO (fase 7).* Resumo do protocolo já implementado:
+### Representações
 
-1. **Split** (`src/split.py`): decks com menos de `split.min_cards_per_deck` cartas distintas
-   são descartados (a contagem fica em `data/processed/split_report.json`). 10% dos decks
-   restantes formam a **validação**, usada só para escolher pesos; o resto é a **avaliação**.
-   Em cada deck, 20% das cartas distintas (no mínimo 1) vão para o **teste**, e o resto é **treino**.
-2. **Perfil** (`src/profile.py`): média das linhas de treino ponderada por `min(cópias, 4) / 4`,
-   normalizada em L2. Não há feedback negativo: uma decklist só diz o que foi jogado, não o
-   que foi rejeitado.
-3. **Recomendação** (`src/recommend.py`): cosseno entre o perfil e todas as cartas, excluindo o
-   treino. Há um filtro opcional por identidade de cor: só passam cartas cuja identidade é
-   subconjunto da identidade do deck, e as incolores sempre passam.
-4. **Explicação** (`src/explain.py`): as 5 features que mais contribuem para o produto escalar
-   (a soma de todas as contribuições é exatamente o score), a carta do deck mais parecida e as
-   keywords e tipos em comum.
-5. **Avaliação** (`src/evaluate.py`): busca em grade dos pesos dos blocos pelo nDCG@10 na
-   validação; depois, Precision, Recall, nDCG, cobertura de catálogo e diversidade intra-lista
-   em N = 5 e 10, nos decks de avaliação, para `random`, `popular`, `popular_color`,
-   `cbf_tfidf` e `cbf_tfidf_color`.
+Cada carta tem cinco blocos: texto das regras (TF-IDF ou embeddings MiniLM), tipos,
+cores/identidade de cor, keywords e atributos numéricos. Os blocos categóricos e de
+texto são normalizados por linha; seus pesos vêm de `config.yaml`. O bloco numérico
+preserva magnitudes conforme `features.numeric_norm`.
 
-Saídas em `results/`: `weights_search.csv`, `metrics.csv`, `metrics.md`, `fig_metrics.png`,
-`params.json` e `qualitative.md`.
+O TF-IDF usa texto limpo, incluindo stemming. MiniLM recebe o `oracle_text` original,
+sem stemming; seus vetores são L2-normalizados e substituem somente o bloco de texto.
+Tipos, cores, keywords e atributos numéricos permanecem iguais. Blocos e nomes de
+features são salvos em `data/processed` para evitar reconstruções na interface.
 
-> Esperado: o baseline popular tende a ganhar em precisão, porque decks competitivos copiam
-> uns dos outros. A FBC deve ganhar em cobertura e diversidade.
+### Protocolo sem vazamento
 
-### Checklist anti-vazamento
+1. **Carga:** Scryfall fornece os metadados; decklists do MTGO são filtradas pelo
+   formato, período e regras em `config.yaml`. Básicos e cartas não resolvidas são
+   excluídos da matriz de interações.
+2. **Split:** decks com poucas cartas distintas são removidos. Uma fração de decks é
+   separada para validação; o restante compõe a avaliação. Em cada deck, cartas
+   distintas são divididas entre treino e teste.
+3. **Perfil:** média ponderada das cartas de treino, usando
+   `min(cópias, limite) / limite`, seguida de normalização L2.
+4. **Ranking:** cosseno entre o perfil e cada carta do catálogo. Cartas do treino são
+   excluídas; o filtro de identidade de cor é opcional.
+5. **Ajuste:** os pesos dos blocos e λ de MMR são selecionados somente na validação.
+   TF-IDF e MiniLM têm buscas independentes de pesos. MMR reordena os 100 candidatos
+   mais bem pontuados por TF-IDF, maximizando
+   `λ · sim(perfil, carta) − (1 − λ) · max_sim(carta, selecionadas)`.
+6. **Avaliação:** métodos e hiperparâmetros selecionados são comparados nos decks
+   reservados, com Precision, Recall e nDCG em N = 5 e 10, cobertura do catálogo e
+   diversidade intra-lista. A avaliação não participa da escolha de pesos nem de λ.
 
-| Item | Status | Onde é garantido |
-|---|---|---|
-| O perfil usa só o treino | ✅ | `recommend_for_deck` e `deck_data` usam só linhas `part == "train"` |
-| A popularidade usa só o treino | ✅ | `baselines.popularity_counts` conta só o treino dos decks de avaliação (testado) |
-| Os pesos dos blocos são escolhidos na validação | ✅ | `evaluate.search_weights` recebe só os decks `validation` |
-| O λ do MMR é escolhido na validação | ⏳ | fase 6 |
-| O TF-IDF usa só o texto das cartas | ✅ | `features.text_block` é ajustado só sobre o texto do catálogo |
-| Os embeddings usam só o texto das cartas | ⏳ | fase 6 |
-| As recomendações excluem o treino | ✅ | `tests/test_recommend.py`, `tests/test_evaluate.py` |
-| A seed está fixa em tudo | ✅ | `make_rng(cfg, seed_offsets.*)` no split e no baseline aleatório |
+O argumento de ausência de vazamento é que o perfil é calculado exclusivamente com
+cartas de treino; os pesos e λ são escolhidos em decks de validação separados; e os
+vetores de cartas dependem apenas de metadados/texto do catálogo, não de interações
+nem de cartas de teste. A validação não é usada para calcular métricas finais.
 
-## Resultados
+### Arquivos gerados
 
-*TODO (fase 5): tabela copiada de `results/metrics.md`.*
+| Caminho | Conteúdo |
+|---|---|
+| `data/processed/*.parquet` | Catálogo, interações e split |
+| `data/processed/block_*.npz` | Blocos de features pré-computados |
+| `data/processed/embeddings.npy` | Embeddings MiniLM em cache |
+| `results/weights_search.csv` | Busca de pesos TF-IDF na validação |
+| `results/weights_search_emb.csv` | Busca de pesos MiniLM na validação |
+| `results/mmr_lambda_search.csv` | Escolha de λ na validação |
+| `results/metrics.md`, `metrics.csv` | Tabela final de métricas |
+| `results/fig_metrics.png` | Métricas comparativas |
+| `results/fig_mmr_tradeoff.png` | nDCG@10 × diversidade para λ = 1.0, 0.9, 0.8, 0.7 e 0.5 |
+| `results/qualitative.md` | Recomendações e explicações qualitativas |
+| `results/params.json` | Configuração, versões e hiperparâmetros selecionados |
 
-## Membros e papéis
+### Resultados
+
+Os números dependem da versão dos dados obtidos e são gerados localmente pelo
+pipeline, não devem ser preenchidos com valores estimados. Consulte a tabela gerada
+em [`results/metrics.md`](results/metrics.md); ela contém Precision, Recall, nDCG,
+cobertura e diversidade em N = 5 e N = 10 para `random`, `popular`, `popular_color`,
+`cbf_tfidf`, `cbf_tfidf_color`, `cbf_tfidf_mmr` e `cbf_emb`.
+
+## Interface
+
+`streamlit run app/streamlit_app.py` disponibiliza duas abas:
+
+- **Deck do dataset:** escolhe um deck de avaliação, mostra o treino e recomenda
+  cartas com imagem Scryfall, score e explicação expansível.
+- **Monte seu deck:** seleciona cartas do catálogo e obtém recomendações na hora.
+
+A barra lateral permite ajustar N, filtro de cor, TF-IDF/MiniLM e MMR/λ. A aplicação
+carrega os artefatos pré-computados e não executa treinamento de features por consulta.
+O primeiro carregamento do catálogo pode levar mais tempo; o cache de recursos do
+Streamlit é usado nas consultas subsequentes.
+
+## Estrutura
+
+```text
+config.yaml             parâmetros e caminhos
+data/download.py        download de Scryfall e decklists
+src/                    carga, features, split, recomendação e avaliação
+app/streamlit_app.py    interface Streamlit
+tests/                  testes automatizados
+docs/                   rascunhos para relatório e slides
+results/                tabelas e figuras geradas (não inclui dados brutos)
+run_all.py              pipeline completo
+```
+
+Rascunhos de relatório e slides: [metodologia](docs/metodologia.md),
+[exemplo numérico](docs/exemplo_numerico.md), [limitações](docs/limitacoes.md) e
+[análise dos resultados](docs/analise_resultados.md).
+
+## Equipe e apresentação
 
 | Membro | Papel |
 |---|---|
-| *Nome* | *Papel* |
-| *Nome* | *Papel* |
+| *Preencher pela equipe* | *Preencher pela equipe* |
+| *Preencher pela equipe* | *Preencher pela equipe* |
 
-**Vídeo de apresentação:** *link*
+**Vídeo de apresentação:** *inserir o link da equipe*.
 
-## Fontes de dados e créditos
+## Fontes e créditos
 
-- Dados de cartas: [Scryfall](https://scryfall.com/docs/api/bulk-data) (bulk `oracle_cards`).
-- Decklists: [MTGODecklistCache](https://github.com/Badaro/MTGODecklistCache) (torneios do Magic Online).
-  O repositório original foi arquivado em 10/06/2025; usamos o fork mantido
-  [Jiliac/MTGODecklistCache](https://github.com/Jiliac/MTGODecklistCache), no mesmo formato,
-  com o commit fixado em `config.yaml` para reprodutibilidade. Só a pasta
-  `mtgo.com_limited_data` é usada; nomes de jogadores são descartados na leitura.
-- Magic: The Gathering é propriedade da Wizards of the Coast. Este é um projeto acadêmico
-  de fã, sem afiliação com a Wizards of the Coast ou com o Scryfall.
+- Cartas: [Scryfall Bulk Data](https://scryfall.com/docs/api/bulk-data), conjunto
+  `oracle_cards`.
+- Decklists: [Jiliac/MTGODecklistCache](https://github.com/Jiliac/MTGODecklistCache),
+  fork mantido no formato do repositório original arquivado. O commit usado está
+  fixado em `config.yaml`; somente `mtgo.com_limited_data` é processado.
+- Embeddings: modelo aberto
+  [sentence-transformers/all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
+- Imagens: [Scryfall](https://scryfall.com).
