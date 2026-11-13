@@ -132,3 +132,42 @@ def test_color_filter() -> None:
 def test_color_filter_needs_item_identity(X) -> None:
     with pytest.raises(ValueError):
         recommend(build_profile(X, [0], [1.0]), X, [0], n=5, color_identity=8)
+
+
+def _mmr_reference(candidates, item_matrix, lam, n):
+    """Original loop implementation of MMR, kept as the reference for the vectorized one."""
+    cand_idxs = [idx for idx, _ in candidates]
+    vecs = np.asarray(item_matrix[cand_idxs].toarray())
+    pos = {idx: k for k, idx in enumerate(cand_idxs)}
+    selected, remaining = [], set(cand_idxs)
+    for _ in range(min(n, len(cand_idxs))):
+        best_idx, best_mmr = -1, -np.inf
+        for idx in cand_idxs:
+            if idx not in remaining:
+                continue
+            max_sim = (max(float(vecs[pos[idx]] @ vecs[pos[s]]) for s, _ in selected)
+                       if selected else 0.0)
+            score = lam * candidates[pos[idx]][1] - (1.0 - lam) * max_sim
+            if score > best_mmr or (score == best_mmr and (best_idx < 0 or idx < best_idx)):
+                best_mmr, best_idx = score, idx
+        selected.append((best_idx, best_mmr))
+        remaining.discard(best_idx)
+    return selected
+
+
+@pytest.mark.parametrize("seed", range(5))
+@pytest.mark.parametrize("lam", [1.0, 0.9, 0.7, 0.5, 0.0])
+@pytest.mark.parametrize("signed", [False, True])  # embeddings can have negative entries
+def test_vectorized_mmr_matches_reference(seed: int, lam: float, signed: bool) -> None:
+    from src.recommend import mmr_rerank, top_n
+
+    rng = np.random.default_rng(seed)
+    raw = rng.normal(size=(300, 16)) if signed else rng.random((300, 16))
+    X = normalize_rows(sp.csr_matrix(raw))
+    p = build_profile(X, [0, 1, 2], np.ones(3))
+    scores = np.asarray(X @ p).ravel()
+    scores[[0, 1, 2]] = -np.inf
+    candidates = top_n(scores, 100)
+    fast, ref = mmr_rerank(candidates, X, lam, 10), _mmr_reference(candidates, X, lam, 10)
+    assert [i for i, _ in fast] == [i for i, _ in ref]
+    assert np.allclose([s for _, s in fast], [s for _, s in ref])
