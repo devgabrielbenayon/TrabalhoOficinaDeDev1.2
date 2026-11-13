@@ -55,6 +55,61 @@ def top_n(scores: np.ndarray, n: int) -> list[tuple[int, float]]:
     return [(int(i), float(scores[i])) for i in order]
 
 
+def mmr_rerank(
+    candidates: list[tuple[int, float]],
+    item_matrix: sp.csr_matrix,
+    lam: float,
+    n: int,
+) -> list[tuple[int, float]]:
+    """Maximal Marginal Relevance: re-ranking guloso para diversidade.
+
+    ``candidates`` são pares ``(idx, relevance_score)`` já ordenados por relevância
+    decrescente (vindos de ``cosine_scores`` + ``top_n``).
+    ``lam`` controla o trade-off: 1.0 = só relevância, 0.0 = só diversidade.
+    ``item_matrix`` deve estar row-normalized (dot product = cosine).
+    Retorna até ``n`` pares ``(idx, mmr_score)`` em ordem decrescente de MMR.
+    """
+    if not np.isfinite(lam) or not 0.0 <= lam <= 1.0:
+        raise ValueError("lam must be a finite value between 0 and 1")
+    if not candidates or n <= 0:
+        return []
+
+    cand_idxs = [idx for idx, _ in candidates]
+    cand_vecs = np.asarray(item_matrix[cand_idxs].toarray())
+    pos = {idx: k for k, idx in enumerate(cand_idxs)}
+    selected: list[tuple[int, float]] = []
+    remaining = set(cand_idxs)
+
+    for _ in range(min(n, len(cand_idxs))):
+        best_idx = -1
+        best_mmr = -np.inf
+
+        for idx in cand_idxs:
+            if idx not in remaining:
+                continue
+            relevance = candidates[pos[idx]][1]
+            if selected:
+                vec_i = cand_vecs[pos[idx]]
+                max_sim = max(
+                    float(vec_i @ cand_vecs[pos[sel_idx]])
+                    for sel_idx, _ in selected
+                )
+            else:
+                max_sim = 0.0
+
+            mmr_score = lam * relevance - (1.0 - lam) * max_sim
+            if mmr_score > best_mmr or (
+                mmr_score == best_mmr and (best_idx < 0 or idx < best_idx)
+            ):
+                best_mmr = mmr_score
+                best_idx = idx
+
+        selected.append((best_idx, best_mmr))
+        remaining.discard(best_idx)
+
+    return selected
+
+
 def recommend(
     profile: np.ndarray,
     item_matrix: sp.csr_matrix,
@@ -70,10 +125,8 @@ def recommend(
     ``color_identity``: optional deck identity bits (see ``deck_identity``); when given, only
     cards whose identity is a subset of it are ranked. Requires ``item_identity``
     (``identity_bits`` of the catalog, aligned with the matrix rows).
-    ``mmr`` is reserved for diversity re-ranking (Phase 6) and must be ``None`` for now.
+    ``mmr``: when a float (λ), applies MMR re-ranking for diversity.
     """
-    if mmr is not None:
-        raise NotImplementedError("MMR re-ranking is implemented in Phase 6")
     scores = cosine_scores(profile, item_matrix)
     excl = np.asarray(list(exclude_idxs), dtype=np.int64)
     scores[excl] = -np.inf
@@ -81,6 +134,9 @@ def recommend(
         if item_identity is None:
             raise ValueError("color_identity filter needs item_identity")
         scores[~color_mask(item_identity, color_identity)] = -np.inf
+    if mmr is not None:
+        candidates = top_n(scores, 100)
+        return mmr_rerank(candidates, item_matrix, lam=float(mmr), n=n)
     return top_n(scores, n)
 
 
@@ -91,15 +147,20 @@ def recommend_for_deck(
     max_copies: int,
     item_identity: np.ndarray | None = None,
     color_filter: bool = False,
+    mmr: Any = None,
 ) -> tuple[list[tuple[int, float]], np.ndarray, np.ndarray]:
     """Build the profile from the deck's train rows only and rank the catalog.
 
     ``deck``: rows of ``split.parquet`` for a single deck (``item_idx, copies, part``).
+    ``mmr``: quando float (λ), aplica MMR re-ranking para diversidade.
     Returns ``(recs, profile, train_idxs)``.
     """
     train = deck[deck["part"] == "train"]
     train_idxs = train["item_idx"].to_numpy(dtype=np.int64)
     profile = build_profile(item_matrix, train_idxs, copy_weights(train["copies"], max_copies))
     identity = deck_identity(item_identity, train_idxs) if color_filter else None
-    recs = recommend(profile, item_matrix, train_idxs, n, color_identity=identity, item_identity=item_identity)
+    recs = recommend(
+        profile, item_matrix, train_idxs, n,
+        color_identity=identity, item_identity=item_identity, mmr=mmr,
+    )
     return recs, profile, train_idxs

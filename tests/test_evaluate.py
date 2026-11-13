@@ -6,11 +6,13 @@ import pytest
 import scipy.sparse as sp
 
 from src.evaluate import (
-    METHODS, best_weights, choose_decks, deck_data, evaluate_methods, metrics_markdown, per_deck_metrics,
-    plot_metrics, qualitative_report, rank_cbf,
-    run_methods, search_weights, weight_grid,
+    METHODS, best_mmr_lambda, best_weights, choose_decks, deck_data,
+    evaluate_methods, metrics_markdown, per_deck_metrics, plot_metrics,
+    plot_mmr_tradeoff, qualitative_report, rank_cbf, rank_cbf_mmr,
+    run_methods, search_mmr_lambda, search_weights, weight_grid,
 )
 from src.features import BLOCKS, compose
+from src.metrics import intra_list_diversity
 from src.recommend import identity_bits, normalize_rows, recommend_for_deck
 
 N_ITEMS = 40
@@ -67,6 +69,34 @@ def test_weight_search(toy) -> None:
     assert set(best_weights(search)) == set(BLOCKS)
 
 
+def test_mmr_lambda_search_and_tradeoff_plot(toy, tmp_path) -> None:
+    Xn = normalize_rows(compose(toy["blocks"], dict.fromkeys(BLOCKS, 1.0)))
+    validation = deck_data(toy["split"], "validation", N_ITEMS, 4, toy["identity"])
+    search = search_mmr_lambda(Xn, validation, [1.0, 0.9, 0.8, 0.7, 0.5], 5, 3)
+
+    assert set(search["lambda"]) == {1.0, 0.9, 0.8, 0.7, 0.5}
+    assert search["ndcg@5"].is_monotonic_decreasing
+    assert best_mmr_lambda(search) in set(search["lambda"])
+
+    data = deck_data(toy["split"], "eval", N_ITEMS, 4, toy["identity"])
+    tradeoff_rows = []
+    for lam in [1.0, 0.9, 0.8, 0.7, 0.5]:
+        recs = rank_cbf_mmr(Xn, data, 10, 3, lam)
+        per_deck = per_deck_metrics(recs, data, 10)
+        tradeoff_rows.append({
+            "lambda": lam,
+            "ndcg@10": float(per_deck["ndcg"].mean()),
+            "diversity": float(np.mean([
+                intra_list_diversity([idx for idx, _ in row], Xn)
+                for row in recs
+            ])),
+        })
+    tradeoff = pd.DataFrame(tradeoff_rows)
+    plot_path = tmp_path / "fig_mmr_tradeoff.png"
+    plot_mmr_tradeoff(tradeoff, best_mmr_lambda(search), plot_path)
+    assert plot_path.stat().st_size > 0
+
+
 def _eval_cfg(toy) -> dict:
     return toy["cfg"] | {"seed": 42, "seed_offsets": {"random_baseline": 2}}
 
@@ -117,3 +147,30 @@ def test_qualitative_report(toy) -> None:
     md = qualitative_report(toy["split"], catalog, Xn, names, per_deck, toy["identity"], cfg)
     assert md.count("**Análise:**") == len(choose_decks(per_deck))
     assert "## Maior nDCG" in md and "mais parecida no deck" in md
+
+def test_embedding_method_uses_embedding_matrix(toy) -> None:
+    Xn = normalize_rows(
+        compose(toy["blocks"], dict.fromkeys(BLOCKS, 1.0))
+    )
+    Xn_emb = normalize_rows(
+        sp.random(
+            N_ITEMS, 12, density=0.5,
+            random_state=123, format="csr"
+        )
+    )
+
+    data = deck_data(
+        toy["split"], "eval", N_ITEMS, 4, toy["identity"]
+    )
+
+    recs = run_methods(
+        Xn, data, toy["split"], toy["identity"],
+        10, _eval_cfg(toy), Xn_emb=Xn_emb
+    )
+
+    expected = rank_cbf(
+        Xn_emb, data, 10,
+        batch_size=toy["cfg"]["evaluate"]["batch_size"]
+    )
+
+    assert recs["cbf_emb"] == expected
