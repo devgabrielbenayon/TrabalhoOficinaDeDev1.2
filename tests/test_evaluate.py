@@ -127,7 +127,8 @@ def test_metrics_table_and_outputs(toy, tmp_path) -> None:
 
 def test_choose_decks() -> None:
     per_deck = pd.DataFrame({"deck_id": [10, 11, 12, 13, 14], "ndcg": [0.2, 0.9, 0.0, 0.5, 0.0]})
-    assert choose_decks(per_deck) == [("Maior nDCG", 11), ("nDCG mediano", 10), ("nDCG = 0 (caso de erro)", 12)]
+    assert choose_decks(per_deck) == [
+        ("Maior nDCG", 11), ("nDCG mediano entre os decks com acerto", 13), ("nDCG = 0 (caso de erro)", 12)]
     no_zero = pd.DataFrame({"deck_id": [1, 2], "ndcg": [0.5, 0.1]})
     assert [d for _, d in choose_decks(no_zero)] == [1, 2]
 
@@ -174,3 +175,38 @@ def test_embedding_method_uses_embedding_matrix(toy) -> None:
     )
 
     assert recs["cbf_emb"] == expected
+
+
+def test_choose_decks_median_has_hits_and_identities_differ() -> None:
+    # 6 of 8 decks have nDCG = 0: a plain median would be another error case.
+    per_deck = pd.DataFrame({"deck_id": range(8), "ndcg": [0.9, 0.3, 0, 0, 0, 0, 0, 0]})
+    chosen = dict((label, d) for label, d in choose_decks(per_deck))
+    assert per_deck.set_index("deck_id").at[chosen["nDCG mediano entre os decks com acerto"], "ndcg"] > 0
+    # With identities, the error deck skips decks sharing the colors already shown.
+    identity = {0: 8, 1: 2, 2: 8, 3: 2, 4: 16, 5: 1, 6: 1, 7: 1}
+    chosen = [d for _, d in choose_decks(per_deck, identity)]
+    assert chosen == [0, 1, 4]
+    assert len({identity[d] for d in chosen}) == 3
+
+
+def test_diversity_uses_common_matrix_by_default(toy) -> None:
+    Xn = normalize_rows(compose(toy["blocks"], dict.fromkeys(BLOCKS, 1.0)))
+    Xn_emb = normalize_rows(sp.random(N_ITEMS, 12, density=0.5, random_state=123, format="csr"))
+    data = deck_data(toy["split"], "eval", N_ITEMS, 4, toy["identity"])
+    recs = run_methods(Xn, data, toy["split"], toy["identity"], 10, _eval_cfg(toy), Xn_emb=Xn_emb)
+    metrics = evaluate_methods({"cbf_emb": recs["cbf_emb"]}, data, Xn, [10])
+    expected = np.mean([intra_list_diversity([i for i, _ in r], Xn) for r in recs["cbf_emb"]])
+    assert np.isclose(metrics.at[0, "diversity"], expected)
+
+
+def test_dense_path_matches_sparse_path(toy, monkeypatch) -> None:
+    import src.evaluate as ev
+
+    Xn = normalize_rows(compose(toy["blocks"], dict.fromkeys(BLOCKS, 1.0)))
+    data = deck_data(toy["split"], "eval", N_ITEMS, 4, toy["identity"])
+    monkeypatch.setattr(ev, "DENSE_THRESHOLD", 2.0)   # force the sparse path
+    sparse_recs = rank_cbf(Xn, data, 10, 5, toy["identity"], color_filter=True)
+    monkeypatch.setattr(ev, "DENSE_THRESHOLD", -1.0)  # force the dense path
+    dense_recs = rank_cbf(Xn, data, 10, 5, toy["identity"], color_filter=True)
+    assert [[i for i, _ in r] for r in dense_recs] == [[i for i, _ in r] for r in sparse_recs]
+    assert np.allclose([s for r in dense_recs for _, s in r], [s for r in sparse_recs for _, s in r])
