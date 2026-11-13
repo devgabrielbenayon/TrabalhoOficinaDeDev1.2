@@ -15,6 +15,17 @@ afiliado nem endossado pela Wizards of the Coast. As imagens são servidas pelo 
 - Espaço livre suficiente para os arquivos de dados e o cache do modelo; reserve
   aproximadamente 3 GB.
 
+**Linux / macOS**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+**Windows (PowerShell)**
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -22,13 +33,14 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-No macOS/Linux, ative o ambiente com `source .venv/bin/activate`.
 As dependências fixam as versões principais e instalam a variante CPU do PyTorch.
 
 ## Execução
 
-```powershell
-# Baixa os dados, processa, divide, ajusta e avalia o sistema
+Com o ambiente ativado (os comandos são iguais em todos os sistemas):
+
+```bash
+# Baixa os dados, processa, divide, ajusta e avalia o sistema (~4-5 min)
 python run_all.py
 
 # Usa os arquivos já presentes em data/raw
@@ -111,17 +123,35 @@ nem de cartas de teste. A validação não é usada para calcular métricas fina
 | `results/mmr_lambda_search.csv` | Escolha de λ na validação |
 | `results/metrics.md`, `metrics.csv` | Tabela final de métricas |
 | `results/fig_metrics.png` | Métricas comparativas |
-| `results/fig_mmr_tradeoff.png` | nDCG@10 × diversidade para λ = 1.0, 0.9, 0.8, 0.7 e 0.5 |
+| `results/fig_mmr_tradeoff.png`, `mmr_tradeoff.csv` | nDCG@10 × diversidade na avaliação para λ = 1.0, 0.9, 0.8, 0.7 e 0.5 |
 | `results/qualitative.md` | Recomendações e explicações qualitativas |
 | `results/params.json` | Configuração, versões e hiperparâmetros selecionados |
 
 ### Resultados
 
-Os números dependem da versão dos dados obtidos e são gerados localmente pelo
-pipeline, não devem ser preenchidos com valores estimados. Consulte a tabela gerada
-em [`results/metrics.md`](results/metrics.md); ela contém Precision, Recall, nDCG,
-cobertura e diversidade em N = 5 e N = 10 para `random`, `popular`, `popular_color`,
-`cbf_tfidf`, `cbf_tfidf_color`, `cbf_tfidf_mmr` e `cbf_emb`.
+Gerados por `python run_all.py` (seed 42, commit fixado do MTGODecklistCache): médias
+sobre **9.414 decks de avaliação**; catálogo de 1.772 cartas. Tabela completa, com N = 5,
+em [`results/metrics.md`](results/metrics.md); análise em
+[`docs/analise_resultados.md`](docs/analise_resultados.md).
+
+| Método (N = 10) | Precision | Recall | nDCG | Cobertura | Diversidade |
+|---|---:|---:|---:|---:|---:|
+| random | 0,0025 | 0,0057 | 0,0041 | **1,0000** | **0,9491** |
+| popular | 0,0617 | 0,1421 | 0,1154 | 0,0107 | 0,7022 |
+| popular_color | **0,0928** | **0,2132** | **0,1579** | 0,0214 | 0,7109 |
+| cbf_tfidf | 0,0513 | 0,1226 | 0,0989 | 0,4938 | 0,5877 |
+| cbf_tfidf_color | 0,0555 | 0,1326 | 0,1081 | 0,5237 | 0,6253 |
+| cbf_tfidf_mmr (λ = 1,0) | 0,0513 | 0,1226 | 0,0989 | 0,4938 | 0,5877 |
+| cbf_emb | 0,0299 | 0,0730 | 0,0513 | 0,2754 | 0,6476 |
+
+Pesos escolhidos na validação: TF-IDF com texto 1,0, cores 0,25, keywords 0,25 (tipos e
+numérico 0); MiniLM com texto 1,0, tipos 0,25, cores 0,25, keywords 1,0, numérico 0,3.
+A validação escolheu λ = 1,0 para o MMR (sem reordenação), por isso `cbf_tfidf_mmr` coincide
+com `cbf_tfidf`; a curva em `results/fig_mmr_tradeoff.png` mostra o efeito de λ < 1.
+A diversidade de todos os métodos é medida no mesmo espaço (matriz TF-IDF selecionada).
+
+Num notebook comum (12 threads de CPU, sem GPU), `python run_all.py` levou cerca de 4 minutos
+com os dados já baixados; a primeira execução também baixa os dados e o modelo MiniLM.
 
 ## Interface
 
