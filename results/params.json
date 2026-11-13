@@ -1,0 +1,156 @@
+{
+  "seed": 42,
+  "block_weights_selected": {
+    "text": 1.0,
+    "types": 0.0,
+    "colors": 0.25,
+    "keywords": 0.25,
+    "numeric": 0.0
+  },
+  "embedding_block_weights_selected": {
+    "text": 1.0,
+    "types": 0.25,
+    "colors": 0.25,
+    "keywords": 1.0,
+    "numeric": 0.3
+  },
+  "mmr_lambda_selected": 1.0,
+  "dataset": {
+    "catalog_items": 1772,
+    "decks_in_split": 10460,
+    "decks_validation": 1046,
+    "decks_eval": 9414,
+    "split_rows": 226824
+  },
+  "config": {
+    "seed": 42,
+    "seed_offsets": {
+      "split": 1,
+      "random_baseline": 2
+    },
+    "data": {
+      "format": "Modern",
+      "months_back": 6,
+      "min_main_cards": 40,
+      "use_sideboard": false,
+      "drop_duplicate_decks": true,
+      "end_date": null,
+      "min_decks": 50,
+      "min_items": 500
+    },
+    "source": {
+      "decks_repo": "https://github.com/Jiliac/MTGODecklistCache.git",
+      "decks_commit": "136284ce52252add48ee953b2438c4e543d63db7",
+      "deck_sources": [
+        "mtgo.com_limited_data"
+      ],
+      "scryfall_bulk_api": "https://api.scryfall.com/bulk-data",
+      "scryfall_bulk_type": "oracle_cards",
+      "scryfall_named_api": "https://api.scryfall.com/cards/named",
+      "user_agent": "mtg-recsys-academic/0.1",
+      "request_delay_s": 0.12
+    },
+    "split": {
+      "test_fraction": 0.2,
+      "validation_fraction": 0.1,
+      "min_cards_per_deck": 10
+    },
+    "features": {
+      "tfidf": {
+        "ngram_range": [
+          1,
+          2
+        ],
+        "min_df": 2,
+        "max_features": 20000
+      },
+      "block_weights": {
+        "text": 1.0,
+        "types": 0.5,
+        "colors": 0.5,
+        "keywords": 0.5,
+        "numeric": 0.3
+      },
+      "numeric_norm": "scaled",
+      "sample_cards": [
+        "Lightning Bolt",
+        "Ragavan, Nimble Pilferer",
+        "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki"
+      ],
+      "embeddings": {
+        "enabled": true,
+        "model": "sentence-transformers/all-MiniLM-L6-v2"
+      }
+    },
+    "recommend": {
+      "max_copies": 4,
+      "explain_top_features": 5,
+      "demo_deck_id": null,
+      "demo_n": 10,
+      "n_values": [
+        5,
+        10
+      ],
+      "color_filter": false,
+      "mmr": {
+        "enabled": false,
+        "lambda": 0.7
+      }
+    },
+    "evaluate": {
+      "batch_size": 512,
+      "search_n": 10,
+      "mmr_lambdas": [
+        1.0,
+        0.9,
+        0.8,
+        0.7,
+        0.5
+      ],
+      "qualitative_method": "cbf_tfidf",
+      "qualitative_n": 10,
+      "qualitative_train_preview": 15,
+      "weight_grid": {
+        "text": [
+          1.0
+        ],
+        "types": [
+          0.0,
+          0.25,
+          0.5,
+          1.0
+        ],
+        "colors": [
+          0.0,
+          0.25,
+          0.5,
+          1.0
+        ],
+        "keywords": [
+          0.0,
+          0.25,
+          0.5,
+          1.0
+        ],
+        "numeric": [
+          0.0,
+          0.3,
+          0.6
+        ]
+      }
+    }
+  },
+  "versions": {
+    "python": "3.12.3",
+    "numpy": "2.1.3",
+    "pandas": "2.2.3",
+    "scipy": "1.14.1",
+    "scikit-learn": "1.5.2",
+    "nltk": "3.9.1",
+    "PyYAML": "6.0.2",
+    "matplotlib": "3.9.2",
+    "torch": "2.5.1+cpu",
+    "sentence-transformers": "3.3.1",
+    "streamlit": "1.40.1"
+  }
+}
